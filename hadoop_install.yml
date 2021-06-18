@@ -1,0 +1,218 @@
+---
+- hosts: all
+  become: yes
+  become_user: root
+  become_method: sudo
+  gather_facts: false
+  tasks:
+    - name: Copy JDK from local to remote server hadoop user home dir
+      ansible.builtin.copy:
+        src: /root/jdk-8u291-linux-x64.tar.gz
+        dest: /home/hadoop/
+
+    - name: Copy JDK in all hosts /usr/local directory
+      ansible.builtin.copy:
+        src: /home/hadoop/jdk1.8.0_291
+        dest: /usr/local/
+        remote_src: yes
+
+    - name: Extract HADOOP tar into destination
+      ansible.builtin.unarchive:
+        src: https://archive.apache.org/dist/hadoop/core/hadoop-3.0.0/hadoop-3.0.0.tar.gz
+        dest: /opt/
+        remote_src: yes
+
+    - name: Rename hadoop directory
+      ansible.builtin.command:
+        cmd: mv /opt/hadoop-3.0.0 /opt/hadoop
+
+    - name: Create log directories for hadoop components
+      ansible.builtin.file:
+        path: /var/log/{{item}}
+        state: directory
+        mode: '0755'
+        owner: hadoop
+        group: hadoop
+      with_items:
+        - spark
+        - hive
+        - impala
+
+    - name: Create namenode and datanode directories
+      ansible.builtin.file:
+        path: /opt/hadoop/data/hdfs/{{item}}
+        state: directory
+        mode: '0755'
+        owner: hadoop
+        group: hadoop
+      with_items:
+        - namenode
+        - datanode
+
+    - name: Give hadoop permissions to hadoop components dir
+      ansible.builtin.file:
+        path: /opt/{{ item }}
+        owner: hadoop
+        group: hadoop
+      with_items:
+      - hadoop
+      - hive
+      - spark
+      - impala
+
+    - name: Add environment variables in hadoop user .bashrc file
+      blockinfile:
+        path: /home/hadoop/.bashrc
+        marker: "#Custom entires"
+        block: |
+          export JAVA_HOME=/usr/local/jdk1.8.0_291
+          export PATH=$PATH:$JAVA_HOME/bin
+          export HADOOP_HOME=/opt/hadoop/
+          export PATH=$PATH:$HADOOP_HOME/bin
+          export PATH=$PATH:$HADOOP_HOME/sbin
+          export PATH=$PATH:/opt/hadoop/bin/
+          export HADOOP_MAPRED_HOME=$HADOOP_HOME
+          export HADOOP_COMMON_HOME=$HADOOP_HOME
+          export HADOOP_HDFS_HOME=$HADOOP_HOME
+          export YARN_HOME=$HADOOP_HOME
+          export HADOOP_CONF_DIR=/opt/hadoop/etc/hadoop
+          export YARN_CONF_DIR=$HADOOP_HOME/etc/hadoop          
+
+    - name: Add environment variables in hadoop-env.sh file
+      blockinfile:
+        path: /opt/hadoop/etc/hadoop/hadoop-env.sh
+        marker: "#Custom entires"
+        block: |
+          export JAVA_HOME=/usr/local/jdk1.8.0_291/
+          export HADOOP_LOG_DIR=/var/log/hadoop
+
+    - name: Add configuration in hdfs-site.xml
+      blockinfile:
+        path: /opt/hadoop/etc/hadoop/hdfs-site.xml
+        marker: "<!-- Custom entires -->"
+        insertafter: "<configuration>"
+        block: |
+          <property>
+            <name>dfs.replication</name>
+            <value>3</value>
+          </property>
+          <property>
+            <name>dfs.namenode.name.dir</name>
+            <value>file:///opt/hadoop/data/hdfs/namenode</value>
+          </property>
+          <property>
+            <name>dfs.datanode.name.dir</name>
+            <value>file:///opt/hadoop/data/hdfs/datanode</value>
+          </property>
+          <property>
+            <name>dfs.nameservices</name>
+            <value>test-ha</value>
+          </property>
+          <property>
+            <name>dfs.ha.namenodes.test-ha</name>
+            <value>nn1, nn2</value>
+          </property>
+          <property>
+            <name>dfs.namenode.rpc-address.test-ha.nn1</name>
+            <value>journal-node-1.test.com:8020</value>
+          </property>
+          <property>
+            <name>dfs.namenode.rpc-address.test-ha.nn2</name>
+            <value>journal-node-2.test.com:8020</value>
+          </property>
+          <property>
+            <name>dfs.namenode.http-address.test-ha.nn1</name>
+            <value>journal-node-1.test.com:50070</value>
+          </property>
+          <property>
+          <name>dfs.namenode.http-address.test-ha.nn2</name>
+          <value>journal-node-2.test.com:50070</value>
+          </property>
+          <property>
+          <name>dfs.namenode.shared.edits.dir</name>
+          <value>qjournal://journal-node-1.test.com:8485,journal-node-2.test.com:8485,journal-node-3.test.com:8485/test-ha</value>
+          </property>
+          <property>
+            <name>dfs.client.failover.proxy.provider.test-ha</name>
+            <value>org.apache.hadoop.hdfs.server.namenode.ha.ConfiguredFailoverProxyProvider</value>
+          </property>
+          <property>
+            <name>dfs.ha.automatic-failover.enabled</name>
+            <value>true</value>
+          </property>
+          <property>
+            <name>ha.zookeeper.quorum</name>
+            <value>journal-node-1.test.com:2181,journal-node-2.test.com:2181,journal-node-3.test.com:2181</value>
+          </property>
+          <property>
+            <name>dfs.ha.fencing.methods</name>
+            <value>sshfence</value>
+          </property>
+          <property>
+            <name>dfs.ha.fencing.ssh.private-key-files</name>
+            <value>/home/hadoop/.ssh/id_rsa</value>
+          </property>
+          <property>
+            <name>dfs.ha.fencing.ssh.connect-timeout</name>
+            <value>30000</value>
+          </property>
+
+    - name: Add configuration in yarn-site.xml
+      blockinfile:
+        path: /opt/hadoop/etc/hadoop/yarn-site.xml
+        marker: "<!-- Custom entires -->"
+        insertbefore: "</configuration>"
+        block: |
+          <property>
+            <name>yarn.resourcemanager.hostname</name>
+            <value>journal-node-2.test.com</value>
+          </property>
+
+    - name: Add configuration in core-site.xml
+      blockinfile:
+        path: /opt/hadoop/etc/hadoop/core-site.xml
+        marker: "<!-- Custom entires -->"
+        insertbefore: "</configuration>"
+        block: |
+          <property>
+            <name>fs.defaultFS</name>
+            <value>hdfs://test-ha</value>
+          </property>
+          <property>
+            <name>dfs.journalnode.edits.dir</name>
+            <value>/home/hadoop/HA/data/jn</value>
+          </property>
+          <property>
+            <name>ha.zookeeper.quorum</name>
+            <value>journal-node-1.test.com:2181,journal-node-2.test.com:2181,journal-node-3.test.com:2181</value>
+          </property>
+          <property>
+            <!-- Appoint hadoop Catalog of temporary files stored in cluster -->
+            <name>hadoop.tmp.dir</name>
+            <value>/home/hadoop/tmp</value>
+          </property>
+          <property>
+            <!-- ZKFC connection to ZooKeeper Timeout duration -->
+            <name>ha.zookeeper.session-timeout.ms</name>
+            <value>10000</value>
+          </property>
+      
+- hosts: datanode
+  become: yes
+  become_user: root
+  become_method: sudo
+  tasks:
+    - name: Create a directory if it does not exist
+      ansible.builtin.file:
+        path: /opt/hadoop/etc/hadoop/slave
+        state: touch
+
+    - name: Add datanode hostnames in it
+      ansible.builtin.lineinfile:
+        path: /opt/hadoop/etc/hadoop/slave
+        line: '{{item}}'
+      with_items:
+        - data-node-3.test.com
+        - data-node-4.test.com
+        - data-node-2.test.com
+        - data-node-1.test.com
